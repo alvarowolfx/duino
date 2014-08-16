@@ -1,5 +1,7 @@
-#include <Servo.h>
-
+//#include <Servo.h>
+#include <RF24Network.h>
+#include <RF24.h>
+#include <SPI.h>
 
 bool debug = false;
 
@@ -11,19 +13,41 @@ char pin[3];
 char val[4];
 char aux[4];
 
-Servo servo;
+//Servo servo;
+
+bool isNetworkEnabled = false;
+// nRF24L01(+) radio attached using Getting Started board 
+RF24 radio(7,8);
+// Network uses that radio
+RF24Network network(radio);
+// Address of base node
+const uint16_t this_node = 0;
+const uint16_t channel = 90;
+
+// Structure of our payload
+struct payload_t
+{
+  unsigned long pin;
+  unsigned long state;
+};
 
 void setup() {
   Serial.begin(115200);
 }
 
 void loop() {
+  if(isNetworkEnabled){
+    // Pump the network regularly if the module was started
+    handleNetworkUpdate();    
+  }
   while(Serial.available() > 0) {
     char x = Serial.read();
     if (x == '!') index = 0;      // start
     else if (x == '.') process(); // end
     else messageBuffer[index++] = x;
   }
+    
+
 }
 
 /*
@@ -65,11 +89,75 @@ void process() {
     case 2:  dr(pin,val);              break;
     case 3:  aw(pin,val);              break;
     case 4:  ar(pin,val);              break;
+    case 96: handleNetwork(pin,val,aux); break;
     case 97: handlePing(pin,val,aux);  break;
-    case 98: handleServo(pin,val,aux); break;
+    /*case 98: handleServo(pin,val,aux); break;*/
     case 99: toggleDebug(val);         break;
     default:                           break;
   }
+}
+
+const char* types[3]= {"send","recv","fail"};
+const int SEND = 0;
+const int RECV = 1;
+const int FAIL = 2;
+void printNetworkMessage(int type,int state,int node,int pin){    
+    char m[30];
+    sprintf(m, "rf::%d::%d::%d::%d",types[type],state,node,pin);
+    Serial.println(m);    
+    free(m);
+}
+
+/*
+ * Handle nrf comands
+ * send
+ */
+void handleNetwork(char *pin,char *node,char *state){
+
+  int stateVal = atoi(state);
+  int to_node = atoi(node);
+  
+  if(!isNetworkEnabled){
+    SPI.begin();
+    radio.begin();
+    network.begin(/*channel*/ channel,/*node address*/ this_node);
+    // Pump the network regularly
+    network.update();
+    isNetworkEnabled = true;
+  }  
+
+  if(to_node == 0){
+    char msgInit[9];
+    sprintf(msgInit, "rf::init::%s", node);
+    Serial.println(msgInit);
+    free(msgInit);
+    return;
+  }
+
+  int p = getPin(pin);
+  if(p == -1) { if(debug) Serial.println("badpin"); return; }  
+
+  payload_t payload = { p, stateVal };
+  RF24NetworkHeader header(/*to node*/ to_node);
+  bool ok = network.write(header,&payload,sizeof(payload));
+
+  if(ok){
+    printNetworkMessage(SEND,stateVal,to_node,p);
+  }else{
+    printNetworkMessage(FAIL,stateVal,to_node,p);
+  }
+
+}
+
+void handleNetworkUpdate(){
+    network.update();
+    while(network.available()){
+       // If so, grab it and print it out
+      RF24NetworkHeader header;
+      payload_t payload;
+      network.read(header,&payload,sizeof(payload));
+      printNetworkMessage(RECV,payload.state,header.from_node,payload.pin);
+   }
 }
 
 /*
@@ -206,7 +294,7 @@ void handlePing(char *pin, char *val, char *aux) {
 /*
  * Handle Servo commands
  * attach, detach, write, read, writeMicroseconds, attached
- */
+ 
 void handleServo(char *pin, char *val, char *aux) {
   if (debug) Serial.println("ss");
   int p = getPin(pin);
@@ -236,10 +324,6 @@ void handleServo(char *pin, char *val, char *aux) {
     servo.write(atoi(aux));
     delay(15);
 
-    // TODO: Experiment with microsecond pulses
-    // digitalWrite(pin, HIGH);   // start the pulse
-    // delayMicroseconds(pulseWidth);  // pulse width
-    // digitalWrite(pin, LOW);    // stop the pulse
 
   // 03(3) Read
   } else if (atoi(val) == 3) {
@@ -250,3 +334,4 @@ void handleServo(char *pin, char *val, char *aux) {
     Serial.println(m);
   }
 }
+*/
